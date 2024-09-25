@@ -50,11 +50,11 @@ __repo__ = "https://github.com/adafruit/Adafruit_CircuitPython_Wiznet5k.git"
 from random import randint
 import time
 import gc
-import digitalio
-
 from micropython import const
 from adafruit_ticks import ticks_ms, ticks_diff
 
+import adafruit_pioasm
+import rp2pio
 from adafruit_bus_device.spi_device import SPIDevice
 import adafruit_wiznet5k.adafruit_wiznet5k_dhcp as dhcp
 import adafruit_wiznet5k.adafruit_wiznet5k_dns as dns
@@ -191,29 +191,20 @@ class WIZNET5K:  # pylint: disable=too-many-public-methods, too-many-instance-at
     # pylint: disable=too-many-arguments
     def __init__(
         self,
-        pio_sm,  # PIO State Machine을 직접 받아옵니다.
-        cs: digitalio.DigitalInOut,  # CS 핀 객체를 받습니다.
+        pio_sm,  # PIO State Machine
+        cs: digitalio.DigitalInOut,  # CS 핀 객체
         reset: Optional[digitalio.DigitalInOut] = None,
         is_dhcp: bool = True,
         mac: Union[MacAddressRaw, str] = _DEFAULT_MAC,
         hostname: Optional[str] = None,
         debug: bool = False,
     ) -> None:
-        """
-        :param pio_sm: PIO State Machine
-        :param digitalio.DigitalInOut cs: Chip select pin.
-        :param Optional[digitalio.DigitalInOut] reset: Optional reset pin, defaults to None.
-        :param bool is_dhcp: Whether to start DHCP automatically or not, defaults to True.
-        :param Union[MacAddressRaw, str] mac: The Wiznet's MAC Address, defaults to
-            (0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED).
-        :param str hostname: The desired hostname, with optional {} to fill in the MAC
-            address, defaults to None.
-        :param bool debug: Enable debugging output, defaults to False.
-        """
+        """..."""
         self._debug = debug
         self._chip_type = None
         self._pio_sm = pio_sm  # PIO State Machine 사용
-        self._cs = cs
+        self._cs = cs  # CS 핀 객체
+        self._device = None  # 기존 busio.SPI 사용하지 않음
 
         # Reset wiznet module prior to initialization.
         if reset:
@@ -225,8 +216,7 @@ class WIZNET5K:  # pylint: disable=too-many-public-methods, too-many-instance-at
             time.sleep(5)
 
         # Setup chip_select pin.
-        time.sleep(1)
-        self._cs.switch_to_output()  # CircuitPython에서는 switch_to_output() 사용
+        self._cs.switch_to_output()
         self._cs.value = True
 
         # Buffer for reading params from module
@@ -242,6 +232,7 @@ class WIZNET5K:  # pylint: disable=too-many-public-methods, too-many-instance-at
         self.mac_address = mac
         self.src_port = 0
         self._dns = b"\x00\x00\x00\x00"
+
         # udp related
         self.udp_from_ip = [b"\x00\x00\x00\x00"] * self.max_sockets
         self.udp_from_port = [0] * self.max_sockets
@@ -252,56 +243,14 @@ class WIZNET5K:  # pylint: disable=too-many-public-methods, too-many-instance-at
         while ticks_diff(ticks_ms(), start_time) < timeout:
             if self.link_status:
                 break
-            debug_msg("Ethernet link is down…", self._debug)
-            time.sleep(0.5)
+        debug_msg("Ethernet link is down…", self._debug)
+        time.sleep(0.5)
+
         self._dhcp_client = None
 
         # Set DHCP
         if is_dhcp:
             self.set_dhcp(hostname)
-
-    def _write_readinto(self, data_out, data_in):
-        """PIO 기반 SPI 전송 및 수신."""
-        self._pio_sm.write_readinto(data_out, data_in)
-
-    def _read(
-        self,
-        addr: int,
-        callback: int,
-        length: int = 1,
-    ) -> bytes:
-        """Read data from a register address."""
-        self._cs.value = False
-        data_out = bytearray([(addr >> 8) & 0xFF, addr & 0xFF, callback])
-        data_out.extend([0x00] * length)
-        self._write_readinto(data_out, self._rxbuf[: len(data_out)])
-        self._cs.value = True
-        return bytes(self._rxbuf[3 : 3 + length])
-
-    def _write(self, addr: int, callback: int, data: Union[int, bytes]) -> None:
-        """Write data to a register address."""
-        self._cs.value = False
-        data_out = bytearray([(addr >> 8) & 0xFF, addr & 0xFF, callback])
-        if isinstance(data, int):
-            data_out.append(data)
-        else:
-            data_out.extend(data)
-        self._write_readinto(data_out, self._rxbuf[: len(data_out)])
-        self._cs.value = True
-
-    def _write_mr(self, data: int) -> None:
-        """Write to the mode register (MR)."""
-        self._write(_REG_MR[self._chip_type], 0x04, data)
-
-    def _read_mr(self) -> int:
-        """Read from the Mode Register (MR)."""
-        return int.from_bytes(self._read(_REG_MR[self._chip_type], 0x00), "big")
-
-    def _sw_reset_5x00(self) -> bool:
-        """Perform a soft reset on the WIZnet 5100s and 5500 chips."""
-        self._write_mr(_MR_RST)
-        time.sleep(0.05)
-        return self._read_mr() == {"w5500": 0x00, "w5100s": 0x03}[self._chip_type]
 
     def set_dhcp(self, hostname: Optional[str] = None) -> None:
         """
@@ -1125,48 +1074,51 @@ class WIZNET5K:  # pylint: disable=too-many-public-methods, too-many-instance-at
         self._write(_REG_MR[self._chip_type], 0x04, data)
 
     # *** Low Level Methods ***
+    def _write_readinto(self, data_out, data_in):
+        """PIO 기반 SPI 전송 및 수신."""
+        self._pio_sm.write_readinto(data_out, data_in)
 
-    # def _read(
-    #     self,
-    #     addr: int,
-    #     callback: int,
-    #     length: int = 1,
-    # ) -> bytes:
-    #     """
-    #     Read data from a register address.
+    def _read(
+        self,
+        addr: int,
+        callback: int,
+        length: int = 1,
+    ) -> bytes:
+        """
+        Read data from a register address.
 
-    #     :param int addr: Register address to read.
-    #     :param int callback: Callback reference.
-    #     :param int length: Number of bytes to read from the register, defaults to 1.
+        :param int addr: Register address to read.
+        :param int callback: Callback reference.
+        :param int length: Number of bytes to read from the register, defaults to 1.
 
-    #     :return bytes: Data read from the chip.
-    #     """
-    #     with self._device as bus_device:
-    #         self._chip_read(bus_device, addr, callback)
-    #         self._rxbuf = bytearray(length)
-    #         bus_device.readinto(self._rxbuf)
-    #         return bytes(self._rxbuf)
+        :return bytes: Data read from the chip.
+        """
+        self._cs.value = False
+        data_out = bytearray([(addr >> 8) & 0xFF, addr & 0xFF, callback])
+        data_out.extend([0x00] * length)
+        self._write_readinto(data_out, self._rxbuf[:len(data_out)])
+        self._cs.value = True
+        return bytes(self._rxbuf[3 : 3 + length])
 
-    # def _write(self, addr: int, callback: int, data: Union[int, bytes]) -> None:
-    #     """
-    #     Write data to a register address.
+    def _write(self, addr: int, callback: int, data: Union[int, bytes]) -> None:
+        """
+        Write data to a register address.
 
-    #     :param int addr: Destination address.
-    #     :param int callback: Callback reference.
-    #     :param Union[int, bytes] data: Data to write to the register address, if data
-    #         is an integer, it must be 1 or 2 bytes.
+        :param int addr: Destination address.
+        :param int callback: Callback reference.
+        :param Union[int, bytes] data: Data to write to the register address, if data
+            is an integer, it must be 1 or 2 bytes.
 
-    #     :raises OverflowError: if integer data is more than 2 bytes.
-    #     """
-    #     with self._device as bus_device:
-    #         self._chip_write(bus_device, addr, callback)
-    #         try:
-    #             data = data.to_bytes(1, "big")
-    #         except OverflowError:
-    #             data = data.to_bytes(2, "big")
-    #         except AttributeError:
-    #             pass
-    #         bus_device.write(data)
+        :raises OverflowError: if integer data is more than 2 bytes.
+        """
+        self._cs.value = False
+        data_out = bytearray([(addr >> 8) & 0xFF, addr & 0xFF, callback])
+        if isinstance(data, int):
+            data_out.append(data)
+        else:
+            data_out.extend(data)
+        self._write_readinto(data_out, self._rxbuf[:len(data_out)])
+        self._cs.value = True
 
     def _read_two_byte_sock_reg(self, sock: int, reg_address: int) -> int:
         """Read a two byte socket register."""
@@ -1306,27 +1258,49 @@ class WIZNET5K:  # pylint: disable=too-many-public-methods, too-many-instance-at
 
     # *** Chip Specific Methods ***
 
-    def _chip_read(self, device: "busio.SPI", address: int, call_back: int) -> None:
+    # def _chip_read(self, device: "busio.SPI", address: int, call_back: int) -> None:
+    #     """Chip specific calls for _read method."""
+    #     if self._chip_type in ("w5500", "w6100"):
+    #         device.write((address >> 8).to_bytes(1, "big"))
+    #         device.write((address & 0xFF).to_bytes(1, "big"))
+    #         device.write(call_back.to_bytes(1, "big"))
+    #     elif self._chip_type == "w5100s":
+    #         device.write((0x0F).to_bytes(1, "big"))
+    #         device.write((address >> 8).to_bytes(1, "big"))
+    #         device.write((address & 0xFF).to_bytes(1, "big"))
+
+    # def _chip_write(self, device: "busio.SPI", address: int, call_back: int) -> None:
+    #     """Chip specific calls for _write."""
+    #     if self._chip_type in ("w5500", "w6100"):
+    #         device.write((address >> 8).to_bytes(1, "big"))
+    #         device.write((address & 0xFF).to_bytes(1, "big"))
+    #         device.write(call_back.to_bytes(1, "big"))
+    #     elif self._chip_type == "w5100s":
+    #         device.write((0xF0).to_bytes(1, "big"))
+    #         device.write((address >> 8).to_bytes(1, "big"))
+    #         device.write((address & 0xFF).to_bytes(1, "big"))
+
+    def _chip_read(self, spi_sm: rp2pio.StateMachine, address: int, call_back: int) -> None:
         """Chip specific calls for _read method."""
         if self._chip_type in ("w5500", "w6100"):
-            device.write((address >> 8).to_bytes(1, "big"))
-            device.write((address & 0xFF).to_bytes(1, "big"))
-            device.write(call_back.to_bytes(1, "big"))
+            spi_sm.write((address >> 8).to_bytes(1, "big"))
+            spi_sm.write((address & 0xFF).to_bytes(1, "big"))
+            spi_sm.write(call_back.to_bytes(1, "big"))
         elif self._chip_type == "w5100s":
-            device.write((0x0F).to_bytes(1, "big"))
-            device.write((address >> 8).to_bytes(1, "big"))
-            device.write((address & 0xFF).to_bytes(1, "big"))
+            spi_sm.write((0x0F).to_bytes(1, "big"))
+            spi_sm.write((address >> 8).to_bytes(1, "big"))
+            spi_sm.write((address & 0xFF).to_bytes(1, "big"))
 
-    def _chip_write(self, device: "busio.SPI", address: int, call_back: int) -> None:
+    def _chip_write(self, spi_sm: rp2pio.StateMachine, address: int, call_back: int) -> None:
         """Chip specific calls for _write."""
         if self._chip_type in ("w5500", "w6100"):
-            device.write((address >> 8).to_bytes(1, "big"))
-            device.write((address & 0xFF).to_bytes(1, "big"))
-            device.write(call_back.to_bytes(1, "big"))
+            spi_sm.write((address >> 8).to_bytes(1, "big"))
+            spi_sm.write((address & 0xFF).to_bytes(1, "big"))
+            spi_sm.write(call_back.to_bytes(1, "big"))
         elif self._chip_type == "w5100s":
-            device.write((0xF0).to_bytes(1, "big"))
-            device.write((address >> 8).to_bytes(1, "big"))
-            device.write((address & 0xFF).to_bytes(1, "big"))
+            spi_sm.write((0xF0).to_bytes(1, "big"))
+            spi_sm.write((address >> 8).to_bytes(1, "big"))
+            spi_sm.write((address & 0xFF).to_bytes(1, "big"))
 
     def _chip_socket_read(self, socket_number, pointer, bytes_to_read):
         """Chip specific calls for socket_read."""

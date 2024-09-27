@@ -3,6 +3,9 @@ import rp2pio
 import adafruit_pioasm
 import digitalio
 import time
+from adafruit_ticks import ticks_ms, ticks_diff
+
+_DEFAULT_MAC = "DE:AD:BE:EF:FE:ED"
 
 # PIO 어셈블리 코드: SPI 마스터 구현
 spi_master = """
@@ -19,16 +22,108 @@ bitloop:
     push block
 """
 
+mac_address = [0x00, 0x08, 0xDC, 0x01, 0x02, 0x03]
+ip_address = [192, 168, 11, 100]
+gateway_ip = [192, 168, 11, 1]
+subnet_mask = [255, 255, 255, 0]
+
+def debug_msg(message: str, debug: bool):
+    if debug:
+        print(message)
 
 class WIZNET5K:
-    def __init__(self, sm, cs_pin, rst_pin):
-        self._sm = sm
-        self._cs = digitalio.DigitalInOut(cs_pin)
+    def __init__(
+        self,
+        spi_sm: rp2pio.StateMachine,
+        cs: digitalio.DigitalInOut,
+        reset: Optional[digitalio.DigitalInOut] = None,
+        is_dhcp: bool = True,
+        mac: Union[MacAddressRaw, str] = _DEFAULT_MAC,
+        hostname: Optional[str] = None,
+        debug: bool = False,
+    ) -> None:
+        """
+        :param rp2pio.StateMachine spi_sm: WIZnet 모듈이 연결된 PIO SPI StateMachine.
+        :param digitalio.DigitalInOut cs: 칩 선택 핀.
+        :param digitalio.DigitalInOut reset: 선택적 리셋 핀, 기본값은 None.
+        :param bool is_dhcp: DHCP를 자동으로 시작할지 여부, 기본값은 True.
+        :param Union[MacAddressRaw, str] mac: WIZnet의 MAC 주소, 기본값은 (0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED).
+        :param str hostname: 원하는 호스트 이름, MAC 주소를 채우기 위한 {} 포함 가능, 기본값은 None.
+        :param bool debug: 디버깅 출력 활성화, 기본값은 False.
+        """
+        self._debug = debug
+        self._chip_type = None
+        self._sm = spi_sm
+
+        # CS 핀 초기화
+        self._cs = cs
         self._cs.direction = digitalio.Direction.OUTPUT
         self._cs.value = True
-        self._rst = digitalio.DigitalInOut(rst_pin)
-        self._rst.direction = digitalio.Direction.OUTPUT
-        self._chip_type = "w5500"  # W5500만 사용
+
+        # Reset WIZnet 모듈
+        if reset:
+            debug_msg("* Resetting WIZnet chip", self._debug)
+            reset.switch_to_output()
+            reset.value = False
+            time.sleep(0.1)
+            reset.value = True
+            time.sleep(5)
+        self._rst = reset
+
+        # SPI 통신을 위한 버퍼 초기화
+        self._pbuff = bytearray(8)
+        self._rxbuf = bytearray(2048)  # 최대 패킷 크기 (예시로 2048 바이트)
+
+        # MAC 주소 설정
+        if isinstance(mac, str):
+            # 문자열 형태의 MAC 주소를 파싱
+            self._mac = tuple(int(x, 16) for x in mac.split(":"))
+        else:
+            self._mac = mac
+
+        # 호스트 이름 설정 (필요 시 구현)
+        self._hostname = hostname
+
+        # DHCP 사용 여부 설정
+        self._is_dhcp = is_dhcp
+
+        # 추가적인 초기화 작업 수행
+        self._ch_base_msb = 0
+        self._src_ports_in_use = []
+        self.max_sockets = 8  # W5500은 최대 8개의 소켓을 지원
+
+        # UDP 관련 초기화
+        self.udp_from_ip = [b"\x00\x00\x00\x00"] * self.max_sockets
+        self.udp_from_port = [0] * self.max_sockets
+
+        # WIZnet 칩 초기화
+        self.init()
+
+        # Ethernet 링크가 초기화될 시간을 기다립니다.
+        start_time = time.monotonic()
+        timeout = 5  # 5초 타임아웃
+        while time.monotonic() - start_time < timeout:
+            if self.link_status():
+                break
+            debug_msg("Ethernet 링크가 다운되었습니다...", self._debug)
+            time.sleep(0.5)
+        self._dhcp_client = None
+
+        # DHCP 설정
+        if is_dhcp:
+            self.set_dhcp(hostname)
+
+    def link_status(self):
+        # 링크 상태를 확인하는 메서드 구현 필요
+        # 예시로 PHYCFGR 레지스터를 읽어서 링크 상태를 반환
+        phycfgr = self.read_reg(0x002E, 0)
+        return bool(phycfgr & 0x01)  # LNK 비트 확인
+
+    def set_dhcp(self, hostname=None):
+        # DHCP 클라이언트를 구현하거나 외부 라이브러리를 사용하여 DHCP 기능 추가
+        debug_msg("DHCP 설정 중...", self._debug)
+        # 실제 DHCP 구현은 복잡하므로 여기에 추가해야 합니다.
+        pass
 
     def _select(self):
         self._cs.value = False
@@ -92,19 +187,16 @@ class WIZNET5K:
         # Initialize Common Register
         self.write_reg(0x0000, 0, 0x00)
         # Set MAC Address
-        mac_address = [0x00, 0x08, 0xDC, 0x01, 0x02, 0x03]
+        
         for i, val in enumerate(mac_address):
             self.write_reg(0x0009 + i, 0, val)
         # Set IP Address
-        ip_address = [192, 168, 11, 100]
         for i, val in enumerate(ip_address):
             self.write_reg(0x000F + i, 0, val)
         # Set Gateway IP
-        gateway_ip = [192, 168, 11, 1]
         for i, val in enumerate(gateway_ip):
             self.write_reg(0x0001 + i, 0, val)
         # Set Subnet Mask
-        subnet_mask = [255, 255, 255, 0]
         for i, val in enumerate(subnet_mask):
             self.write_reg(0x0005 + i, 0, val)
         print("W5500 Initialization complete")
@@ -233,6 +325,63 @@ class WIZNET5K:
             "MAC Address:",
             ":".join(f"{self.read_reg(0x0009 + i, 0):02X}" for i in range(6)),
         )
+    def socket_recv(self, sock_num):
+        # 수신된 데이터 크기 읽기
+        rx_size_high = self._read_socket_register(sock_num, 0x0026)
+        rx_size_low = self._read_socket_register(sock_num, 0x0027)
+        rx_size = (rx_size_high << 8) + rx_size_low
+
+        if rx_size == 0:
+            return None
+
+        # RX 읽기 포인터 읽기
+        rx_rd_high = self._read_socket_register(sock_num, 0x0028)
+        rx_rd_low = self._read_socket_register(sock_num, 0x0029)
+        rx_rd = (rx_rd_high << 8) + rx_rd_low
+
+        # 읽을 물리 주소 계산
+        rx_buffer_base = 0x6000 + sock_num * 0x1000
+        addr = rx_buffer_base + (rx_rd & 0x0FFF)
+
+        # RX 버퍼에서 데이터 읽기
+        data = self._read(addr, 0x18, rx_size)
+
+        # RX 읽기 포인터 업데이트
+        rx_rd += rx_size
+        self._write_socket_register(sock_num, 0x0028, (rx_rd >> 8) & 0xFF)
+        self._write_socket_register(sock_num, 0x0029, rx_rd & 0xFF)
+
+        # RECV 명령 실행
+        self._write_socket_register(sock_num, 0x0001, 0x40)
+
+        return data
+
+    def socket_send(self, sock_num, data):
+        data_length = len(data)
+
+        # TX 쓰기 포인터 읽기
+        tx_wr_high = self._read_socket_register(sock_num, 0x0024)
+        tx_wr_low = self._read_socket_register(sock_num, 0x0025)
+        tx_wr = (tx_wr_high << 8) + tx_wr_low
+
+        # 쓸 물리 주소 계산
+        tx_buffer_base = 0x4000 + sock_num * 0x1000
+        addr = tx_buffer_base + (tx_wr & 0x0FFF)
+
+        # TX 버퍼에 데이터 쓰기
+        self._write(addr, 0x14, data)
+
+        # TX 쓰기 포인터 업데이트
+        tx_wr += data_length
+        self._write_socket_register(sock_num, 0x0024, (tx_wr >> 8) & 0xFF)
+        self._write_socket_register(sock_num, 0x0025, tx_wr & 0xFF)
+
+        # SEND 명령 실행
+        self._write_socket_register(sock_num, 0x0001, 0x20)
+
+        # SEND 명령 완료 대기
+        while self._read_socket_register(sock_num, 0x0001):
+            time.sleep(0.001)
 
 
 # PIO 및 State Machine 설정
@@ -253,8 +402,8 @@ sm = rp2pio.StateMachine(
 )
 
 # CS 및 RST 핀 설정
-cs_pin = board.GP17
-rst_pin = board.GP20
+cs_pin = digitalio.DigitalInOut(board.GP17)
+rst_pin = digitalio.DigitalInOut(board.GP20)
 
 # WIZNET5K 초기화
 wiznet = WIZNET5K(sm, cs_pin, rst_pin)
@@ -277,22 +426,27 @@ wiznet.socket_listen(sock_num, port)
 print(f"Listening on port {port}")
 
 while True:
-    wiznet.print_socket_status(sock_num)
     status = wiznet.socket_status(sock_num)
-    print(f"socket status: {status:02X}")
-    if status == 0x13:  # SOCK_INIT
-        print("Socket initialized, listening...")
-        wiznet.socket_listen(sock_num, port)
-    elif status == 0x14:  # SOCK_LISTEN
-        print("Waiting for connection...")
-    elif status == 0x17:  # SOCK_ESTABLISHED
+    if status == 0x17:  # SOCK_ESTABLISHED
         print("Connection established")
+        # Receive data from the client
         data = wiznet.socket_recv(sock_num)
         if data:
             print(f"Received: {data}")
-            wiznet.socket_send(sock_num, data)  # Echo back
+            # Echo the data back to the client
+            wiznet.socket_send(sock_num, data)
+            print("Data sent back to client")
     elif status == 0x1C:  # SOCK_CLOSE_WAIT
-        print("Connection closing, reinitializing socket")
+        print("Client disconnected, closing socket")
         wiznet.socket_close(sock_num)
         wiznet.socket_init(sock_num)
-    time.sleep(1)  # Increase delay for debugging
+        wiznet.socket_listen(sock_num, port)
+    elif status == 0x14:  # SOCK_LISTEN
+        print("Listening for incoming connections...")
+    elif status == 0x00:  # SOCK_CLOSED
+        print("Socket closed, re-initializing...")
+        wiznet.socket_init(sock_num)
+        wiznet.socket_listen(sock_num, port)
+    else:
+        print(f"Socket status: {status:02X}")
+    time.sleep(0.5)

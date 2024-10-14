@@ -3,6 +3,8 @@ import rp2pio
 import adafruit_pioasm
 import digitalio
 import time
+import struct
+import random
 
 from adafruit_ticks import ticks_ms, ticks_diff
 from micropython import const
@@ -52,6 +54,7 @@ _SNSR_SOCK_INIT = const(0x13)
 SNSR_SOCK_LISTEN = const(0x14)
 SNSR_SOCK_ESTABLISHED = const(0x17)
 SNSR_SOCK_CLOSE_WAIT = const(0x1C)
+_SNSR_SOCK_UDP = const(0x22)
 
 # Other constants
 _MR_RST = const(0x80)
@@ -164,6 +167,65 @@ class WIZNET5K:
         # DHCP setup
         if is_dhcp:
             self.set_dhcp(hostname)
+
+    def dns_query(self, domain_name, dns_server_ip, sock_num=2, timeout=5):
+        print(f"Performing DNS query for: {domain_name}")
+        transaction_id = random.randint(0, 65535)
+
+        # DNS Request Header
+        header = struct.pack(
+            ">HHHHHH",
+            transaction_id,
+            0x0100,
+            1,
+            0,
+            0,
+            0,  # 기본 DNS 요청 헤더 (표준 질의, 재귀적 요청)
+        )
+
+        # DNS Question Section
+        question = b""
+        for label in domain_name.split("."):
+            question += struct.pack("B", len(label)) + label.encode("utf-8")
+        question += struct.pack("B", 0)  # 도메인 이름 종료
+        question += struct.pack(">HH", 1, 1)  # Type A (IPv4 주소), Class IN
+
+        # DNS 요청 메시지 생성
+        dns_request = header + question
+
+        # UDP 소켓을 열어서 DNS 서버로 전송
+        self.socket_open_udp(sock_num, 0)  # 로컬 포트 0을 사용하여 UDP 소켓 열기
+        self.udp_sendto(
+            sock_num, dns_server_ip, 53, dns_request
+        )  # 포트 53 (DNS 서버 포트)로 전송
+
+        # 응답 대기
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < timeout:
+            response = self.udp_recvfrom(sock_num)
+            if response:
+                # 응답 파싱
+                recv_transaction_id = struct.unpack(">H", response[:2])[0]
+                if recv_transaction_id == transaction_id:
+                    # DNS 응답 메시지 파싱
+                    answers_count = struct.unpack(">H", response[6:8])[0]
+                    if answers_count > 0:
+                        # Answer Section 파싱
+                        answer_start = len(header) + len(question)
+                        _, _, _, _, data_len = struct.unpack(
+                            ">HHHLH", response[answer_start : answer_start + 12]
+                        )
+                        ip_start = answer_start + 12
+                        ip_address = struct.unpack(
+                            "BBBB", response[ip_start : ip_start + data_len]
+                        )
+                        print(
+                            f"Domain {domain_name} resolved to: {'.'.join(map(str, ip_address))}"
+                        )
+                        return ip_address
+
+        print("DNS query failed or timed out.")
+        return None
 
     def link_status(self):
         # Check link status using PHYCFGR register
@@ -396,6 +458,73 @@ class WIZNET5K:
         while self._read_socket_register(sock_num, _REG_SNCR):
             time.sleep(0.001)
 
+    def socket_open_udp(self, sock_num, port):
+        print(f"Opening UDP socket {sock_num} on port {port}")
+        # Close the socket first
+        self._write_socket_register(sock_num, _REG_SNCR, _CMD_SOCK_CLOSE)
+        time.sleep(0.01)
+
+        # Set to UDP mode
+        self._write_socket_register(sock_num, _REG_SNMR, _SNMR_UDP)
+        time.sleep(0.01)
+
+        # Set the local port for the UDP socket
+        self._write_socket_register(sock_num, _REG_SNPORT, (port >> 8) & 0xFF)
+        self._write_socket_register(sock_num, _REG_SNPORT + 1, port & 0xFF)
+        time.sleep(0.01)
+
+        # Open the socket
+        self._write_socket_register(sock_num, _REG_SNCR, _CMD_SOCK_OPEN)
+        time.sleep(0.1)
+
+        # Check socket status
+        status = self._read_socket_register(sock_num, _REG_SNSR)
+        if status != _SNSR_SOCK_UDP:
+            raise RuntimeError(
+                f"Failed to open UDP socket {sock_num}, status: 0x{status:02X}"
+            )
+        print(f"UDP socket {sock_num} opened on port {port}")
+
+    def udp_sendto(self, sock_num, dest_ip, dest_port, data):
+        # Set destination IP
+        for i in range(4):
+            self._write_socket_register(sock_num, _REG_SNDIPR + i, dest_ip[i])
+
+        # Set destination port
+        self._write_socket_register(sock_num, _REG_SNDPORT, (dest_port >> 8) & 0xFF)
+        self._write_socket_register(sock_num, _REG_SNDPORT + 1, dest_port & 0xFF)
+
+        # Send data
+        self.socket_send(sock_num, data)
+
+    def udp_recvfrom(self, sock_num):
+        rx_size = self._read_socket_register(
+            sock_num, _REG_SNRX_RSR
+        ) << 8 | self._read_socket_register(sock_num, _REG_SNRX_RSR + 1)
+        if rx_size > 0:
+            # Read RX read pointer
+            rx_rd = self._read_socket_register(
+                sock_num, _REG_SNRX_RD
+            ) << 8 | self._read_socket_register(sock_num, _REG_SNRX_RD + 1)
+
+            # Calculate the physical address
+            addr = rx_rd & _SOCK_MASK
+
+            # Read data from RX buffer
+            data = self._read_data(sock_num, addr, rx_size)
+
+            # Update RX read pointer
+            rx_rd = (rx_rd + rx_size) & 0xFFFF
+            self._write_socket_register(sock_num, _REG_SNRX_RD, (rx_rd >> 8) & 0xFF)
+            self._write_socket_register(sock_num, _REG_SNRX_RD + 1, rx_rd & 0xFF)
+
+            # Issue RECV command
+            self._write_socket_register(sock_num, _REG_SNCR, _CMD_SOCK_RECV)
+
+            # Remove header (8 bytes: source IP, source port, and length)
+            return data[8:]
+        return None
+
     def socket_close(self, sock_num):
         self._write_socket_register(
             sock_num, _REG_SNCR, _CMD_SOCK_CLOSE
@@ -516,34 +645,54 @@ rx_buffer_sizes = [2, 2, 2, 2, 2, 2, 2, 2]  # RX buffer size for each socket (in
 wiznet.socket_set_buffer_size(tx_buffer_sizes, rx_buffer_sizes)
 
 # Initialize socket and start listening
-sock_num = 0
-port = 5000
+sock_num_tcp = 0
+sock_num_udp = 1
+port_tcp = 5000
+port_udp = 6000
 
-print("Socket Open")
-wiznet.socket_init(sock_num)
-wiznet.socket_listen(sock_num, port)
+dns_server_ip = [8, 8, 8, 8]
 
-print(f"Listening on port {port}")
+resolved_ip = wiznet.dns_query("google.com", dns_server_ip)
+
+if resolved_ip:
+    print(f"Resolved IP: {'.'.join(map(str, resolved_ip))}")
+
+print("Socket Open (TCP)")
+wiznet.socket_init(sock_num_tcp)
+wiznet.socket_listen(sock_num_tcp, port_tcp)
+
+print("Socket Open (UDP)")
+wiznet.socket_open_udp(sock_num_udp, port_udp)
+
+print(f"Listening on TCP port {port_tcp} and UDP port {port_udp}")
 
 while True:
-    status = wiznet.socket_status(sock_num)
-    if status == SNSR_SOCK_ESTABLISHED:  # SOCK_ESTABLISHED
+    # Handle TCP socket
+    status_tcp = wiznet.socket_status(sock_num_tcp)
+    if status_tcp == SNSR_SOCK_ESTABLISHED:  # SOCK_ESTABLISHED
         # Receive data from the client
-        data = wiznet.socket_recv(sock_num)
+        data = wiznet.socket_recv(sock_num_tcp)
         if data:
-            print(f"Received: {data}")
+            print(f"[TCP] Received: {data}")
             # Echo the data back to the client
-            wiznet.socket_send(sock_num, data)
-    elif status == SNSR_SOCK_CLOSE_WAIT:  # SOCK_CLOSE_WAIT
-        print("Client disconnected, closing socket")
-        wiznet.socket_close(sock_num)
-        wiznet.socket_init(sock_num)
-        wiznet.socket_listen(sock_num, port)
-    elif status == SNSR_SOCK_LISTEN:  # SOCK_LISTEN
+            wiznet.socket_send(sock_num_tcp, data)
+    elif status_tcp == SNSR_SOCK_CLOSE_WAIT:  # SOCK_CLOSE_WAIT
+        print("[TCP] Client disconnected, closing socket")
+        wiznet.socket_close(sock_num_tcp)
+        wiznet.socket_init(sock_num_tcp)
+        wiznet.socket_listen(sock_num_tcp, port_tcp)
+    elif status_tcp == SNSR_SOCK_LISTEN:  # SOCK_LISTEN
         pass  # Listening for incoming connections
-    elif status == SNSR_SOCK_CLOSED:  # SOCK_CLOSED
-        wiznet.socket_init(sock_num)
-        wiznet.socket_listen(sock_num, port)
-    else:
-        print(f"Socket status: {status:02X}")
-    # time.sleep(0.1)
+    elif status_tcp == SNSR_SOCK_CLOSED:  # SOCK_CLOSED
+        wiznet.socket_init(sock_num_tcp)
+        wiznet.socket_listen(sock_num_tcp, port_tcp)
+
+    # Handle UDP socket
+    data_udp = wiznet.udp_recvfrom(sock_num_udp)
+    if data_udp:
+        print(f"[UDP] Received: {data_udp}")
+        # Echo the data back to the sender (for demonstration purposes)
+        wiznet.udp_sendto(
+            sock_num_udp, [192, 168, 11, 63], port_udp, data_udp
+        )  # Replace with the appropriate destination IP and port
+        time.sleep(1)

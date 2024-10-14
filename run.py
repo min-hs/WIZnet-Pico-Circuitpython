@@ -5,89 +5,68 @@ import digitalio
 import time
 
 from adafruit_ticks import ticks_ms, ticks_diff
+from micropython import const
 
 # *** Wiznet Common Registers ***
-_REG_MR = 0x0000  # Mode Register
-_REG_GAR = 0x0001  # Gateway Address Register
-_REG_SUBR = 0x0005  # Subnet Mask Register
-_REG_VERSIONR = 0x0039  # Version Register
-_REG_SHAR = 0x0009  # Source Hardware Address Register
-_REG_SIPR = 0x000F  # Source IP Address Register
-_REG_LINK_FLAG = 0x002E  # PHY Configuration Register (for link status)
-_REG_RCR = 0x001B  # Retry Count Register
-_REG_RTR = 0x0019  # Retry Time Register
+_REG_MR = const(0x0000)
+_REG_GAR = const(0x0001)
+_REG_SUBR = const(0x0005)
+_REG_SHAR = const(0x0009)
+_REG_SIPR = const(0x000F)
+_REG_VERSIONR = const(0x0039)
+_REG_LINK_FLAG = const(0x002E)
+_REG_RTR = const(0x0019)
+_REG_RCR = const(0x001B)
+_REG_PHYCFGR = const(0x002E)
 
 # *** Wiznet Socket Registers ***
-_REG_SNMR = 0x0000  # Socket Mode Register
-_REG_SNCR = 0x0001  # Socket Command Register
-_REG_SNIR = 0x0002  # Socket Interrupt Register
-_REG_SNSR = 0x0003  # Socket Status Register
-_REG_SNPORT = 0x0004  # Socket Source Port Register
-_REG_SNDIPR = 0x000C  # Socket Destination IP Address Register
-_REG_SNDPORT = 0x0010  # Socket Destination Port Register
-_REG_SNRX_RSR = 0x0026  # Socket RX Received Size Register
-_REG_SNRX_RD = 0x0028  # Socket RX Read Pointer Register
-_REG_SNTX_FSR = 0x0020  # Socket TX Free Size Register
-_REG_SNTX_WR = 0x0024  # Socket TX Write Pointer Register
+_REG_SNMR = const(0x0000)
+_REG_SNCR = const(0x0001)
+_REG_SNIR = const(0x0002)
+_REG_SNSR = const(0x0003)
+_REG_SNPORT = const(0x0004)
+_REG_SNTX_FSR = const(0x0020)
+_REG_SNTX_WR = const(0x0024)
+_REG_SNRX_RSR = const(0x0026)
+_REG_SNRX_RD = const(0x0028)
+_REG_SNDIPR = const(0x000C)
+_REG_SNDPORT = const(0x0010)
 
-# Socket Status
-SNSR_SOCK_CLOSED = 0x00
-_SNSR_SOCK_INIT = 0x13
-SNSR_SOCK_LISTEN = 0x14
-_SNSR_SOCK_SYNSENT = 0x15
-SNSR_SOCK_SYNRECV = 0x16
-SNSR_SOCK_ESTABLISHED = 0x17
-SNSR_SOCK_FIN_WAIT = 0x18
-_SNSR_SOCK_CLOSING = 0x1A
-SNSR_SOCK_TIME_WAIT = 0x1B
-SNSR_SOCK_CLOSE_WAIT = 0x1C
-_SNSR_SOCK_LAST_ACK = 0x1D
-_SNSR_SOCK_UDP = 0x22
-_SNSR_SOCK_IPRAW = 0x32
-_SNSR_SOCK_MACRAW = 0x42
-_SNSR_SOCK_PPPOE = 0x5F
+# Socket Commands (Sn_CR values)
+_CMD_SOCK_OPEN = const(0x01)
+_CMD_SOCK_LISTEN = const(0x02)
+_CMD_SOCK_CONNECT = const(0x04)
+_CMD_SOCK_DISCON = const(0x08)
+_CMD_SOCK_CLOSE = const(0x10)
+_CMD_SOCK_SEND = const(0x20)
+_CMD_SOCK_RECV = const(0x40)
 
-# Socket Commands (CMD)
-_CMD_SOCK_OPEN = 0x01
-_CMD_SOCK_LISTEN = 0x02
-_CMD_SOCK_CONNECT = 0x04
-_CMD_SOCK_DISCON = 0x08
-_CMD_SOCK_CLOSE = 0x10
-_CMD_SOCK_SEND = 0x20
-_CMD_SOCK_SEND_MAC = 0x21
-_CMD_SOCK_SEND_KEEP = 0x22
-_CMD_SOCK_RECV = 0x40
+# Socket Modes (Sn_MR values)
+_SNMR_CLOSE = const(0x00)
+_SNMR_TCP = const(0x01)
+_SNMR_UDP = const(0x02)
 
-# Socket Interrupt Register Flags
-_SNIR_SEND_OK = 0x10
-SNIR_TIMEOUT = 0x08
-_SNIR_RECV = 0x04
-SNIR_DISCON = 0x02
-_SNIR_CON = 0x01
+# Socket Status Register values (Sn_SR)
+SNSR_SOCK_CLOSED = const(0x00)
+_SNSR_SOCK_INIT = const(0x13)
+SNSR_SOCK_LISTEN = const(0x14)
+SNSR_SOCK_ESTABLISHED = const(0x17)
+SNSR_SOCK_CLOSE_WAIT = const(0x1C)
 
-_CH_SIZE = 0x100
-_SOCK_SIZE = 0x800  # MAX W5k socket size
-_SOCK_MASK = 0x7FF
-# Register commands
-_MR_RST = 0x80  # Mode Register RST
-# Socket mode register
-_SNMR_CLOSE = 0x00
-_SNMR_TCP = 0x21
-SNMR_UDP = 0x02
-_SNMR_IPRAW = 0x03
-_SNMR_MACRAW = 0x04
-_SNMR_PPPOE = 0x05
-
-_MAX_PACKET = 4000
-_LOCAL_PORT = 0x400
-# Default hardware MAC address
+# Other constants
+_MR_RST = const(0x80)
 _DEFAULT_MAC = "DE:AD:BE:EF:FE:ED"
+_MAX_SOCK_NUM = const(0x08)
+_SOCKET_INVALID = const(0xFF)
+_SOCK_SIZE = const(0x800)
+_SOCK_MASK = const(0x7FF)
+_CH_SIZE = const(0x100)
 
-# Maximum number of sockets to support, differs between chip versions.
-_MAX_SOCK_NUM = 0x08  # For w5500
-_SOCKET_INVALID = 0xFF
+# Buffer size registers
+_REG_Sn_TXBUF_SIZE = const(0x001E)
+_REG_Sn_RXBUF_SIZE = const(0x0022)
 
-# PIO 어셈블리 코드: SPI 마스터 구현
+# PIO assembly code: SPI master implementation
 spi_master = """
 .program spi_master
     pull block
@@ -124,25 +103,16 @@ class WIZNET5K:
         hostname=None,
         debug: bool = False,
     ) -> None:
-        """
-        :param rp2pio.StateMachine spi_sm: WIZnet 모듈이 연결된 PIO SPI StateMachine.
-        :param digitalio.DigitalInOut cs: 칩 선택 핀.
-        :param digitalio.DigitalInOut reset: 선택적 리셋 핀, 기본값은 None.
-        :param bool is_dhcp: DHCP를 자동으로 시작할지 여부, 기본값은 True.
-        :param Union[MacAddressRaw, str] mac: WIZnet의 MAC 주소, 기본값은 (0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED).
-        :param str hostname: 원하는 호스트 이름, MAC 주소를 채우기 위한 {} 포함 가능, 기본값은 None.
-        :param bool debug: 디버깅 출력 활성화, 기본값은 False.
-        """
         self._debug = debug
         self._chip_type = None
         self._sm = spi_sm
 
-        # CS 핀 초기화
+        # CS pin initialization
         self._cs = cs
         self._cs.direction = digitalio.Direction.OUTPUT
         self._cs.value = True
 
-        # Reset WIZnet 모듈
+        # Reset WIZnet module
         if reset:
             debug_msg("* Resetting WIZnet chip", self._debug)
             reset.switch_to_output()
@@ -152,59 +122,58 @@ class WIZNET5K:
             time.sleep(0.1)
         self._rst = reset
 
-        # SPI 통신을 위한 버퍼 초기화
+        # SPI communication buffer initialization
         self._pbuff = bytearray(8)
-        self._rxbuf = bytearray(2048)  # 최대 패킷 크기 (예시로 2048 바이트)
+        self._rxbuf = bytearray(2048)  # Maximum packet size (example: 2048 bytes)
 
-        # MAC 주소 설정
+        # Set MAC address
         if isinstance(mac, str):
-            # 문자열 형태의 MAC 주소를 파싱
+            # Parse MAC address string
             self._mac = tuple(int(x, 16) for x in mac.split(":"))
         else:
             self._mac = mac
 
-        # 호스트 이름 설정 (필요 시 구현)
+        # Set hostname (if needed)
         self._hostname = hostname
 
-        # DHCP 사용 여부 설정
+        # Set DHCP usage
         self._is_dhcp = is_dhcp
 
-        # 추가적인 초기화 작업 수행
+        # Additional initialization
         self._ch_base_msb = 0
         self._src_ports_in_use = []
         self.max_sockets = 8
 
-        # UDP 관련 초기화
+        # UDP initialization
         self.udp_from_ip = [b"\x00\x00\x00\x00"] * self.max_sockets
         self.udp_from_port = [0] * self.max_sockets
 
-        # WIZnet 칩 초기화
+        # Initialize WIZnet chip
         self.init()
 
-        # Ethernet 링크가 초기화
+        # Ethernet link initialization
         start_time = time.monotonic()
-        timeout = 5  # 5초 타임아웃
+        timeout = 5  # 5 seconds timeout
         while time.monotonic() - start_time < timeout:
             if self.link_status():
                 break
-            debug_msg("Ethernet 링크가 다운되었습니다...", self._debug)
+            debug_msg("Ethernet link is down...", self._debug)
             time.sleep(0.5)
         self._dhcp_client = None
 
-        # DHCP 설정
+        # DHCP setup
         if is_dhcp:
             self.set_dhcp(hostname)
 
     def link_status(self):
-        # 링크 상태를 확인하는 메서드 구현 필요
-        # 예시로 PHYCFGR 레지스터를 읽어서 링크 상태를 반환
-        phycfgr = self.read_reg(_REG_LINK_FLAG, 0)
-        return bool(phycfgr & 0x01)  # LNK 비트 확인
+        # Check link status using PHYCFGR register
+        phycfgr = self.read_reg(_REG_PHYCFGR, 0)
+        return bool(phycfgr & 0x01)  # Check LNK bit
 
     def set_dhcp(self, hostname=None):
-        # DHCP 클라이언트를 구현하거나 외부 라이브러리를 사용하여 DHCP 기능 추가
-        debug_msg("DHCP 설정 중...", self._debug)
-        # 실제 DHCP 구현은 복잡하므로 여기에 추가해야 합니다.
+        # Implement DHCP client or use external library
+        debug_msg("Setting up DHCP...", self._debug)
+        # Actual DHCP implementation needs to be added
         pass
 
     def _select(self):
@@ -226,41 +195,41 @@ class WIZNET5K:
         self._deselect()
         return data_in[3:]
 
-    def _write(self, addr: int, callback: int, data: Union[int, bytes]) -> None:
+    def _write(self, addr: int, callback: int, data) -> None:
         self._select()
-        # 명령어 구성
+        # Construct command
         command = bytearray(
             [
-                (addr >> 8) & 0xFF,
-                addr & 0xFF,
-                (callback | 0x04) & 0xFF,
+                (addr >> 8) & 0xFF,  # Address high byte
+                addr & 0xFF,  # Address low byte
+                (callback | 0x04) & 0xFF,  # Control byte (set write bit)
             ]
         )
 
-        # 데이터 타입 처리
+        # Data type handling
         if isinstance(data, int):
             try:
                 data = data.to_bytes(1, "big")
             except OverflowError:
                 data = data.to_bytes(2, "big")
         elif isinstance(data, bytes) or isinstance(data, bytearray):
-            pass  # 이미 바이트 배열인 경우 그대로 사용
+            pass  # Already bytes-like
         else:
             raise TypeError("Data must be an integer or bytes-like object")
 
-        # 전체 데이터 전송
+        # Transfer data
         data_out = command + data
-        data_in = self._transfer(data_out)
+        self._transfer(data_out)
         self._deselect()
 
     def _write_socket_register(self, sock: int, address: int, data: int) -> None:
-        """W5500 소켓 레지스터에 쓰기."""
-        cntl_byte = (sock << 5) + 0x0C
+        """Write to W5500 socket register."""
+        cntl_byte = (sock << 5) + 0x0C  # Set write bit
         self._write(address, cntl_byte, data)
 
     def _read_socket_register(self, sock: int, address: int) -> int:
-        """W5500 소켓 레지스터에서 읽기."""
-        cntl_byte = (sock << 5) + 0x08
+        """Read from W5500 socket register."""
+        cntl_byte = (sock << 5) + 0x08  # Read operation
         register = self._read(address, cntl_byte)
         return int.from_bytes(register, "big")
 
@@ -273,10 +242,11 @@ class WIZNET5K:
         time.sleep(0.01)
 
     def reset(self):
-        self._rst.value = False
-        time.sleep(0.1)
-        self._rst.value = True
-        time.sleep(0.1)
+        if self._rst is not None:
+            self._rst.value = False
+            time.sleep(0.1)
+            self._rst.value = True
+            time.sleep(0.1)
 
     def init(self):
         self.reset()
@@ -310,13 +280,13 @@ class WIZNET5K:
             raise ValueError("Total TX or RX buffer size cannot exceed 16KB")
 
         for i in range(len(txsize)):
-            self.write_reg(0x001E + i, 0, txsize[i])
-            self.write_reg(0x001F + i, 0, rxsize[i])
+            self.write_reg(_REG_Sn_TXBUF_SIZE + i, 0, txsize[i])
+            self.write_reg(_REG_Sn_RXBUF_SIZE + i, 0, rxsize[i])
             print(f"Socket {i} buffer sizes set: TX={txsize[i]}KB, RX={rxsize[i]}KB")
 
     def socket_init(self, sock_num):
         print("Initializing socket")
-        # 소켓을 닫고 초기화
+        # Close and initialize the socket
         self._write_socket_register(
             sock_num, _REG_SNCR, _CMD_SOCK_CLOSE
         )  # CLOSE command
@@ -325,35 +295,27 @@ class WIZNET5K:
         status = self._read_socket_register(sock_num, _REG_SNSR)
         print(f"Socket {sock_num} status after close: 0x{status:02X}")
 
-        # 버퍼 크기 설정
-        self._write_socket_register(sock_num, 0x001E, 2)  # TX buffer size to 2KB
-        self._write_socket_register(sock_num, 0x001F, 2)  # RX buffer size to 2KB
-        time.sleep(0.01)
-
-        # TCP 모드 설정
+        # Set to TCP mode
         self._write_socket_register(sock_num, _REG_SNMR, _SNMR_TCP)  # Set to TCP mode
         time.sleep(0.01)
 
-        # 소켓 열기
+        # Open the socket
         self._write_socket_register(sock_num, _REG_SNCR, _CMD_SOCK_OPEN)  # OPEN command
         time.sleep(0.1)
 
-        # 소켓 상태 확인
+        # Check socket status
         status = self._read_socket_register(sock_num, _REG_SNSR)
         print(f"Socket {sock_num} status after open: 0x{status:02X}")
-        if status != _SNSR_SOCK_INIT:  # SOCK_INIT 상태가 아니면
+        if status != _SNSR_SOCK_INIT:
             raise RuntimeError(
                 f"Socket {sock_num} failed to initialize, status: 0x{status:02X}"
             )
 
     def socket_listen(self, sock_num, port):
         print(f"Setting socket {sock_num} to listen on port {port}")
-        self._write_socket_register(
-            sock_num, _REG_SNPORT, port >> 8
-        )  # Set port (high byte)
-        self._write_socket_register(
-            sock_num, _REG_SNPORT + 1, port & 0xFF
-        )  # Set port (low byte)
+        # Set port (Sn_PORT is 0x0004, two bytes)
+        self._write_socket_register(sock_num, _REG_SNPORT, (port >> 8) & 0xFF)
+        self._write_socket_register(sock_num, _REG_SNPORT + 1, port & 0xFF)
         time.sleep(0.01)
 
         self._write_socket_register(
@@ -361,8 +323,9 @@ class WIZNET5K:
         )  # LISTEN command
         time.sleep(0.1)
 
+        # Wait for command to complete
         while self._read_socket_register(sock_num, _REG_SNCR):
-            time.sleep(0.01)  # Wait for command to complete
+            time.sleep(0.01)
 
         status = self._read_socket_register(sock_num, _REG_SNSR)
         print(f"Socket {sock_num} status after listen: 0x{status:02X}")
@@ -370,60 +333,66 @@ class WIZNET5K:
     def socket_status(self, sock_num):
         return self._read_socket_register(sock_num, _REG_SNSR)
 
-    def socket_recv(self, sock_num):
-        rx_size_high = self._read_socket_register(sock_num, _REG_SNRX_RSR)
-        rx_size_low = self._read_socket_register(sock_num, _REG_SNRX_RSR + 1)
-        rx_size = (rx_size_high << 8) + rx_size_low
-
-        if rx_size == 0:
-            return None
-
-        # RX 읽기 포인터 읽기
-        rx_rd_high = self._read_socket_register(sock_num, _REG_SNRX_RD)
-        rx_rd_low = self._read_socket_register(sock_num, _REG_SNRX_RD + 1)
-        rx_rd = (rx_rd_high << 8) + rx_rd_low
-
-        # 읽을 물리 주소 계산
-        rx_buffer_base = 0x6000 + sock_num * 0x1000
-        addr = rx_buffer_base + (rx_rd & 0x0FFF)
-
-        # RX 버퍼에서 데이터 읽기
-        data = self._read(addr, 0x18, rx_size)
-
-        # RX 읽기 포인터 업데이트
-        rx_rd += rx_size
-        self._write_socket_register(sock_num, _REG_SNRX_RD, (rx_rd >> 8) & 0xFF)
-        self._write_socket_register(sock_num, _REG_SNRX_RD + 1, rx_rd & 0xFF)
-
-        # RECV 명령 실행
-        self._write_socket_register(sock_num, _REG_SNCR, _CMD_SOCK_RECV)
-
+    def _read_data(self, sock_num, addr, length):
+        # Read data from RX buffer
+        cntl_byte = (sock_num << 5) + 0x18  # 0x18 for RX buffer read
+        data = self._read(addr, cntl_byte, length)
         return data
+
+    def _write_data(self, sock_num, addr, data):
+        # Write data to TX buffer
+        cntl_byte = (sock_num << 5) + 0x14  # 0x14 for TX buffer write
+        self._write(addr, cntl_byte, data)
+
+    def socket_recv(self, sock_num):
+        rx_size = self._read_socket_register(
+            sock_num, _REG_SNRX_RSR
+        ) << 8 | self._read_socket_register(sock_num, _REG_SNRX_RSR + 1)
+        if rx_size > 0:
+            # Read RX read pointer
+            rx_rd = self._read_socket_register(
+                sock_num, _REG_SNRX_RD
+            ) << 8 | self._read_socket_register(sock_num, _REG_SNRX_RD + 1)
+
+            # Calculate the physical address
+            addr = rx_rd & _SOCK_MASK
+
+            # Read data from RX buffer
+            data = self._read_data(sock_num, addr, rx_size)
+
+            # Update RX read pointer
+            rx_rd = (rx_rd + rx_size) & 0xFFFF
+            self._write_socket_register(sock_num, _REG_SNRX_RD, (rx_rd >> 8) & 0xFF)
+            self._write_socket_register(sock_num, _REG_SNRX_RD + 1, rx_rd & 0xFF)
+
+            # Issue RECV command
+            self._write_socket_register(sock_num, _REG_SNCR, _CMD_SOCK_RECV)
+            return data
+        return None
 
     def socket_send(self, sock_num, data):
         data_length = len(data)
 
-        # TX 쓰기 포인터 읽기
-        tx_wr_high = self._read_socket_register(sock_num, _REG_SNTX_WR)
-        tx_wr_low = self._read_socket_register(sock_num, _REG_SNTX_WR + 1)
-        tx_wr = (tx_wr_high << 8) + tx_wr_low
+        # Read TX write pointer
+        tx_wr = self._read_socket_register(
+            sock_num, _REG_SNTX_WR
+        ) << 8 | self._read_socket_register(sock_num, _REG_SNTX_WR + 1)
 
-        # 쓸 물리 주소 계산
-        tx_buffer_base = 0x4000 + sock_num * 0x1000
-        addr = tx_buffer_base + (tx_wr & 0x0FFF)
+        # Calculate the physical address
+        addr = tx_wr & _SOCK_MASK
 
-        # TX 버퍼에 데이터 쓰기
-        self._write(addr, 0x14, data)
+        # Write data to TX buffer
+        self._write_data(sock_num, addr, data)
 
-        # TX 쓰기 포인터 업데이트
-        tx_wr += data_length
+        # Update TX write pointer
+        tx_wr = (tx_wr + data_length) & 0xFFFF
         self._write_socket_register(sock_num, _REG_SNTX_WR, (tx_wr >> 8) & 0xFF)
         self._write_socket_register(sock_num, _REG_SNTX_WR + 1, tx_wr & 0xFF)
 
-        # SEND 명령 실행
+        # Issue SEND command
         self._write_socket_register(sock_num, _REG_SNCR, _CMD_SOCK_SEND)
 
-        # SEND 명령 완료 대기
+        # Wait for SEND command to complete
         while self._read_socket_register(sock_num, _REG_SNCR):
             time.sleep(0.001)
 
@@ -448,8 +417,7 @@ class WIZNET5K:
         )
         port_high = self._read_socket_register(sock_num, _REG_SNPORT)
         port_low = self._read_socket_register(sock_num, _REG_SNPORT + 1)
-        port = (port_high << 8) | port_low
-        print(f"Socket {sock_num} port: {port}")
+        print(f"Socket {sock_num} port: {port_high << 8 | port_low}")
 
     def print_network_info(self):
         print("Network Information:")
@@ -471,41 +439,40 @@ class WIZNET5K:
         )
 
     def read_version(self):
-        version = self.read_reg(_REG_VERSIONR, 0)
+        version_reg_addr = _REG_VERSIONR
+        version = self._read(version_reg_addr, 0x00)[0]
         return version
 
     @property
     def rcr(self) -> int:
         """Retry count register."""
-        return self.read_reg(_REG_RCR)
+        addr = _REG_RCR
+        return int.from_bytes(self._read(addr, 0x00), "big")
 
     @rcr.setter
     def rcr(self, retry_count: int) -> None:
         """Retry count register."""
-        if 0 > retry_count > 255:
+        addr = _REG_RCR
+        if not (0 <= retry_count <= 255):
             raise ValueError("Retries must be from 0 to 255.")
-        self.write_reg(_REG_RCR, 0x04, retry_count)
+        self._write(addr, 0x04, retry_count)
 
     @property
     def rtr(self) -> int:
         """Retry time register."""
-        high = self.read_reg(_REG_RTR)
-        low = self.read_reg(_REG_RTR + 1)
-        return (high << 8) + low
+        addr = _REG_RTR
+        return int.from_bytes(self._read(addr, 0x00, 2), "big")
 
     @rtr.setter
     def rtr(self, retry_time: int) -> None:
         """Retry time register."""
+        addr = _REG_RTR
         if not (0 <= retry_time < 2**16):
             raise ValueError("Retry time must be from 0 to 65535")
-
-        high = (retry_time >> 8) & 0xFF
-        low = retry_time & 0xFF
-        self.write_reg(_REG_RTR, 0x00, high)
-        self.write_reg(_REG_RTR + 1, 0x00, low)
+        self._write(addr, 0x00, retry_time)
 
 
-# PIO 및 State Machine 설정
+# PIO and State Machine setup
 assembled = adafruit_pioasm.assemble(spi_master)
 sm = rp2pio.StateMachine(
     assembled,
@@ -522,33 +489,33 @@ sm = rp2pio.StateMachine(
     pull_threshold=8,
 )
 
-# CS 및 RST 핀 설정
+# CS and RST pin setup
 cs_pin = digitalio.DigitalInOut(board.GP17)
 rst_pin = digitalio.DigitalInOut(board.GP20)
 
-# WIZNET5K 초기화
+# Initialize WIZNET5K
 wiznet = WIZNET5K(sm, cs_pin, rst_pin)
 wiznet.init()
 wiznet.print_network_info()
 
-# WIZNET5K 인스턴스 생성 후
+# After creating the WIZNET5K instance
 version = wiznet.read_version()
-print(f"W5500 버전: 0x{version:02X}")
+print(f"W5500 Version: 0x{version:02X}")
 
-wiznet.rtr = 2000  # 원하는 재시도 시간 값으로 설정
+wiznet.rtr = 2000  # Set desired retry time value
 current_rtr = wiznet.rtr
-print(f"RTR : {current_rtr}")
+print(f"RTR: {current_rtr}")
 
 wiznet.rcr = 8
 current_rcr = wiznet.rcr
-print(f"RCR : {current_rcr}")
+print(f"RCR: {current_rcr}")
 
-# 소켓 버퍼 크기 설정
-tx_buffer_sizes = [2, 2, 2, 2, 2, 2, 2, 2]  # 각 소켓의 TX 버퍼 크기 설정 (KB 단위)
-rx_buffer_sizes = [2, 2, 2, 2, 2, 2, 2, 2]  # 각 소켓의 RX 버퍼 크기 설정 (KB 단위)
+# Set socket buffer sizes
+tx_buffer_sizes = [2, 2, 2, 2, 2, 2, 2, 2]  # TX buffer size for each socket (in KB)
+rx_buffer_sizes = [2, 2, 2, 2, 2, 2, 2, 2]  # RX buffer size for each socket (in KB)
 wiznet.socket_set_buffer_size(tx_buffer_sizes, rx_buffer_sizes)
 
-# 소켓 초기화 및 리스닝
+# Initialize socket and start listening
 sock_num = 0
 port = 5000
 
@@ -573,8 +540,7 @@ while True:
         wiznet.socket_init(sock_num)
         wiznet.socket_listen(sock_num, port)
     elif status == SNSR_SOCK_LISTEN:  # SOCK_LISTEN
-        # print("Listening for incoming connections...")
-        pass
+        pass  # Listening for incoming connections
     elif status == SNSR_SOCK_CLOSED:  # SOCK_CLOSED
         wiznet.socket_init(sock_num)
         wiznet.socket_listen(sock_num, port)

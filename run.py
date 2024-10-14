@@ -650,13 +650,6 @@ sock_num_udp = 1
 port_tcp = 5000
 port_udp = 6000
 
-dns_server_ip = [8, 8, 8, 8]
-
-resolved_ip = wiznet.dns_query("google.com", dns_server_ip)
-
-if resolved_ip:
-    print(f"Resolved IP: {'.'.join(map(str, resolved_ip))}")
-
 print("Socket Open (TCP)")
 wiznet.socket_init(sock_num_tcp)
 wiznet.socket_listen(sock_num_tcp, port_tcp)

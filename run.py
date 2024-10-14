@@ -168,65 +168,6 @@ class WIZNET5K:
         if is_dhcp:
             self.set_dhcp(hostname)
 
-    def dns_query(self, domain_name, dns_server_ip, sock_num=2, timeout=5):
-        print(f"Performing DNS query for: {domain_name}")
-        transaction_id = random.randint(0, 65535)
-
-        # DNS Request Header
-        header = struct.pack(
-            ">HHHHHH",
-            transaction_id,
-            0x0100,
-            1,
-            0,
-            0,
-            0,  # 기본 DNS 요청 헤더 (표준 질의, 재귀적 요청)
-        )
-
-        # DNS Question Section
-        question = b""
-        for label in domain_name.split("."):
-            question += struct.pack("B", len(label)) + label.encode("utf-8")
-        question += struct.pack("B", 0)  # 도메인 이름 종료
-        question += struct.pack(">HH", 1, 1)  # Type A (IPv4 주소), Class IN
-
-        # DNS 요청 메시지 생성
-        dns_request = header + question
-
-        # UDP 소켓을 열어서 DNS 서버로 전송
-        self.socket_open_udp(sock_num, 0)  # 로컬 포트 0을 사용하여 UDP 소켓 열기
-        self.udp_sendto(
-            sock_num, dns_server_ip, 53, dns_request
-        )  # 포트 53 (DNS 서버 포트)로 전송
-
-        # 응답 대기
-        start_time = time.monotonic()
-        while time.monotonic() - start_time < timeout:
-            response = self.udp_recvfrom(sock_num)
-            if response:
-                # 응답 파싱
-                recv_transaction_id = struct.unpack(">H", response[:2])[0]
-                if recv_transaction_id == transaction_id:
-                    # DNS 응답 메시지 파싱
-                    answers_count = struct.unpack(">H", response[6:8])[0]
-                    if answers_count > 0:
-                        # Answer Section 파싱
-                        answer_start = len(header) + len(question)
-                        _, _, _, _, data_len = struct.unpack(
-                            ">HHHLH", response[answer_start : answer_start + 12]
-                        )
-                        ip_start = answer_start + 12
-                        ip_address = struct.unpack(
-                            "BBBB", response[ip_start : ip_start + data_len]
-                        )
-                        print(
-                            f"Domain {domain_name} resolved to: {'.'.join(map(str, ip_address))}"
-                        )
-                        return ip_address
-
-        print("DNS query failed or timed out.")
-        return None
-
     def link_status(self):
         # Check link status using PHYCFGR register
         phycfgr = self.read_reg(_REG_PHYCFGR, 0)
